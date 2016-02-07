@@ -1,9 +1,8 @@
 # powershell
-<li></li>
-
+<li>
 The list of scripts and a brief description of them
 
-1. The script for Travian.\
+1. The script for Travian.\n
 The script adds to the list of targets of attacks (the list is only available 
 to owners Gold).
 
