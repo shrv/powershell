@@ -1,0 +1,381 @@
+﻿#Подключаемся к странице входа, урл указан для 1-го сервера, вслучае использования
+#на других серверах исправить значение $url на необходимый сервер. То же касается файла excel, в котором сохранен 
+#координаты, в случае если файл находит по другому пути или имеет другое имя,
+#необходимо исправить значение переменной $file.
+$url = "http://ts1.travian.ru/"
+$file = "C:\script\farm.xlsx"
+ 
+#Добавляем сборку для работы с графическим интерфейсом
+[void][System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+[void][System.Reflection.Assembly]::LoadWithPartialName("System.Drawing")
+ 
+#Работаем с excel файлом, открываем его, подключаемся к первому листу
+#$excl_form = New-Object System.Windows.Forms.Form
+#$excl_form.Text ='Ожидаем...'
+#$excl_form.StartPosition  = "CenterScreen"
+#$excl_form.AutoSize = $true
+#$excl_form.TopMost = $true
+#$excl_form.Width = 200
+#$excl_form.Height = 100
+#$excl_header = New-Object System.Windows.Forms.Label
+#$excl_header.Text = "Обрабатываем excel файл, ожидайте..."
+#$excl_header.Location  = New-Object System.Drawing.Point(20,10)
+#$excl_header.AutoSize = $true
+#$excl_form.Controls.Add($excl_header)
+#$excl_form.Add_Shown({$excl_form.Activate()})
+#$time = 0
+#while ($time -le 1) {
+#[void]$excl_form.ShowDialog()
+#$time = $time +1}
+#[void]$excl_form.Close()
+ 
+$excel = New-Object -ComObject Excel.Application
+#объявляем что что показывать окно екселя нам не нужно, только подгрузить в память
+$excel.Visible = $false
+$workbook = $excel.Workbooks.Open($file)
+$sheet = $workbook.Worksheets.Item(1)
+#Определяем кол-во заполненных строк
+$row_count = $sheet.UsedRange.Rows.Count
+#загоняем в массив координаты
+$row = 1
+while ($row -le $row_count)
+{
+$full_coord +=@( $sheet.Cells.Item($row,1).Value())
+$row = $row + 1
+}
+$Excel.Quit()
+#раскладываем полученные координаты на X и Y координаты, и сохраняем в два массива.
+$t = 0
+while ($t -lt $full_coord.Count)
+{
+$x_coord += @([regex]::Matches($full_coord[$t], "(?<=\(.).*\d(?=\|)")) 
+$y_coord += @([regex]::Matches($full_coord[$t], "(?<=\|).*\d(?=)"))
+$t = $t + 1
+}
+ 
+#Решил что хранить логин и пароль в открытом виде в самом скрипте как то не кошерно,
+#поэтому скрипт каждый раз запрашивает пароль при работе. Можно хранить в условно
+#зашифрованном виде в реестре или файле, но строка легко расшифровывается одной командой,
+#так что думайте сами.
+#Если будет необходимо, пишите, добавлю возможность хранить пару логин\пароль
+$Cred = Get-Credential -Message 'Подключение к траве'
+$Password = ($Cred.getnetworkcredential().Password)
+$Login = ($Cred.UserName -replace "^.*\\")
+ 
+#Получаем поля формы Login для заполнения
+$Img = Invoke-WebRequest $url -SessionVariable session
+$Img.Forms["Login"].Fields | Out-Null
+#Заполняем форму логином и паролем, формируем POST запрос, передаем на сервер и запоминаем сессию
+$Img.Forms["Login"].Fields["name"] = "$Login"
+$Img.Forms["Login"].Fields["password"] = "$Password"
+$login = Invoke-WebRequest -Method Post -Uri ($url + $Img.Forms["Login"].Action) -Body $Img.Forms["Login"].Fields -WebSession $session
+ 
+#переходиим на страницу деревни
+$Img1 = Invoke-WebRequest ($url + "dorf1.php") -WebSession $session
+#грабим страницу и выцыпляем оттуда токен (посылается вместе с запросами на какие-то действия,
+#дополнительный аутентификатор), получаем список деревень и их идентификатор в базе данных игры
+$img1_temp = $Img1.Scripts.innerHtml -cmatch "window.ajaxToken"
+$img2_temp =[regex]::Matches($Img1.links.outerHTML, "(?<=\<DIV\sclass=name>).*?(?=\</DIV>)")
+$img3_temp =[regex]::Matches($Img1.links.href, "(?<=\?newdid=).*?(?=\&amp;)")
+$i = 0
+do
+{
+$der += @{$img2_temp.Value[$i] = $img3_temp.Value[$i]}
+$i = $i+1
+}
+while ($i -lt $img2_temp.Count)
+$tok_mass = [regex]::Matches($img1_temp, "(?<=\s').*?(?=';)")
+$token = $tok_mass.Value
+ 
+#выводим окно со списком деревень для выбора необходимой деревни
+$der_form = New-Object System.Windows.Forms.Form
+$der_form.Text ='Список деревень'
+$der_form.StartPosition  = "CenterScreen"
+$der_form.AutoSize = $true
+$der_form.TopMost = $true
+$der_form.Width = 470
+$der_form.Height = 220
+ 
+$header = New-Object System.Windows.Forms.Label
+$header.Text = "Выберите из списка деревню в которой необходимо создать farm лист"
+$header.Location  = New-Object System.Drawing.Point(20,10)
+$header.AutoSize = $true
+$der_form.Controls.Add($header)
+ 
+$dropdown_list = New-Object System.Windows.Forms.ComboBox
+$dropdown_list.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+foreach($List in $img2_temp)
+{
+$dropdown_list.Items.Add($List) | Out-Null
+}
+$dropdown_list.Location = New-Object System.Drawing.Point(140,40)
+$der_form.Controls.Add($dropdown_list)
+ 
+$button = New-Object System.Windows.Forms.Button
+$button.Text = 'Ok'
+$button.Location = New-Object System.Drawing.Point(160,80)
+$button.Add_Click({$selected_der.Text = $dropdown_list.SelectedItem.ToString(); $der_form.Close()})
+$der_form.Controls.Add($button)
+ 
+$selected_der = New-Object System.Windows.Forms.Label
+$der_form.Controls.Add($selected_der)
+ 
+$der_form.Add_Shown({$der_form.Activate()})
+[void]$der_form.ShowDialog()
+ 
+# в итоге получили уникальный идентификатор выбранной деревни в БД игры
+$id_der = $der[$selected_der.Text]
+ 
+#переходим в пункт сбора, вкладка избранные цели, выбранной деревни
+$url1 = $url+'build.php?newdid='+$id_der+'&id=39&tt=99&gid=16'
+$search_farmlist = Invoke-WebRequest $url1 -WebSession $session
+ 
+#грабим страницу и получаем имена списков и их id в БД игры
+$farmlist_name = [regex]::Matches($search_farmlist.Content, '(?<=\<div\sclass=\"listTitleText\">\n...........................\s).*?(?=\s*\<img)')
+$farmlist_id = [regex]::Matches($search_farmlist.Content, '(?<=\<input\stype=\"hidden\"\sname=\"lid\"\svalue=\").*?(?=\")')
+$n = 0
+do
+{
+$farmlist_heshTable += @{$farmlist_name.Value[$n] = $farmlist_id.Value[$n]}
+$n = $n + 1
+}
+while ($n -lt $farmlist_name.Count)
+ 
+# создаем форму с списком доступных фарм листов и выбором из этого списка необходимого.
+$farmlist_form = New-Object System.Windows.Forms.Form
+$farmlist_form.Text ='Список фарм листов'
+$farmlist_form.StartPosition  = "CenterScreen"
+$farmlist_form.AutoSize = $true
+$farmlist_form.TopMost = $true
+$farmlist_form.Width = 470
+$farmlist_form.Height = 220
+ 
+$farmlist_header = New-Object System.Windows.Forms.Label
+$farmlist_header.Text = "Выберите из списка лист в которой необходимо внести деревни"
+$farmlist_header.Location  = New-Object System.Drawing.Point(20,10)
+$farmlist_header.AutoSize = $true
+$farmlist_form.Controls.Add($farmlist_header)
+ 
+$dropdown_farmlist = New-Object System.Windows.Forms.ComboBox
+$dropdown_farmlist.DropDownStyle = [System.Windows.Forms.ComboBoxStyle]::DropDownList
+foreach($FarmList in $farmlist_name)
+{
+$dropdown_farmlist.Items.Add($FarmList) | Out-Null
+}
+$dropdown_farmlist.Location = New-Object System.Drawing.Point(140,40)
+$farmlist_form.Controls.Add($dropdown_farmlist)
+ 
+$button_farmlist = New-Object System.Windows.Forms.Button
+$button_farmlist.Text = 'Ok'
+$button_farmlist.Location = New-Object System.Drawing.Point(160,80)
+$button_farmlist.Add_Click({$selected_farmlist.Text = $dropdown_farmlist.SelectedItem.ToString(); $farmlist_form.Close()})
+$farmlist_form.Controls.Add($button_farmlist)
+ 
+$selected_farmlist = New-Object System.Windows.Forms.Label
+$farmlist_form.Controls.Add($selected_farmlist)
+ 
+$farmlist_form.Add_Shown({$farmlist_form.Activate()})
+[void]$farmlist_form.ShowDialog()
+ 
+#в итоге получаем ид в БД игры необходимого фарм-листа
+$id_farmlist = $farmlist_heshTable[$selected_farmlist.Text]
+ 
+# выводим окно с выбором типов войск и их количетсва для внесения в список
+$troops_form = New-Object System.Windows.Forms.Form
+$troops_form.Text ='Выбор войск и кол-во для фарма'
+$troops_form.StartPosition  = "CenterScreen"
+$troops_form.AutoSize = $true
+$troops_form.TopMost = $true
+$troops_form.Width = 400
+$troops_form.Height = 430 
+ 
+$troops = "Легионер,Дубинщик,Галльская Фаланга","Преторианец,Копьеносец,Мечник","Империанец,Топорщик,Следопыт","Конный разведчик,Скаут,Тевтатский гром","Конница императора,Паладин,Друид-всадник","Конница Цезаря,Тевтонская конница,Эдуйская конница","Таран","Огненная катапульта,Катапульта","Сенатор,Вождь,Лидер","Поселенец"
+ 
+$textLabel1 = New-Object “System.Windows.Forms.Label”
+$textLabel1.Left = 150
+$textLabel1.Top = 15
+$textLabel1.Width = 400
+$textLabel1.Text = $troops[0]
+$troops_form.Controls.Add($textLabel1)
+ 
+$textLabel2 = New-Object “System.Windows.Forms.Label”
+$textLabel2.Left = 150
+$textLabel2.Top = 45
+$textLabel2.Width = 400
+$textLabel2.Text = $troops[1]
+$troops_form.Controls.Add($textLabel2)
+ 
+$textLabel3 = New-Object “System.Windows.Forms.Label”
+$textLabel3.Left = 150
+$textLabel3.Top = 75
+$textLabel3.Width = 400
+$textLabel3.Text = $troops[2]
+$troops_form.Controls.Add($textLabel3)
+ 
+$textLabel4 = New-Object “System.Windows.Forms.Label”
+$textLabel4.Left = 150
+$textLabel4.Top = 105
+$textLabel4.Width = 400
+$textLabel4.Text = $troops[3]
+$troops_form.Controls.Add($textLabel4)
+ 
+$textLabel5 = New-Object “System.Windows.Forms.Label”
+$textLabel5.Left = 150
+$textLabel5.Top = 135
+$textLabel5.Width = 400
+$textLabel5.Text = $troops[4]
+$troops_form.Controls.Add($textLabel5)
+ 
+$textLabel6 = New-Object “System.Windows.Forms.Label”
+$textLabel6.Left = 150
+$textLabel6.Top = 165
+$textLabel6.Width = 400
+$textLabel6.Text = $troops[5]
+$troops_form.Controls.Add($textLabel6)
+ 
+$textLabel7 = New-Object “System.Windows.Forms.Label”
+$textLabel7.Left = 150
+$textLabel7.Top = 195
+$textLabel7.Width = 400
+$textLabel7.Text = $troops[6]
+$troops_form.Controls.Add($textLabel7)
+ 
+$textLabel8 = New-Object “System.Windows.Forms.Label”
+$textLabel8.Left = 150
+$textLabel8.Top = 225
+$textLabel8.Width = 400
+$textLabel8.Text = $troops[7]
+$troops_form.Controls.Add($textLabel8)
+ 
+$textLabel9 = New-Object “System.Windows.Forms.Label”
+$textLabel9.Left = 150
+$textLabel9.Top = 255
+$textLabel9.Width = 400
+$textLabel9.Text = $troops[8]
+$troops_form.Controls.Add($textLabel9)
+ 
+$textLabel10 = New-Object “System.Windows.Forms.Label”
+$textLabel10.Left = 150
+$textLabel10.Top = 285
+$textLabel10.Width = 400
+$textLabel10.Text = $troops[9]
+$troops_form.Controls.Add($textLabel10)
+ 
+$textbox1 = New-Object “System.Windows.Forms.TextBox”
+$textbox1.Left = 25
+$textbox1.Top = 15
+$textbox1.Width = 50
+$textbox1.Text = '0'
+$troops_form.Controls.Add($textbox1)
+ 
+$textbox2 = New-Object “System.Windows.Forms.TextBox”
+$textbox2.Left = 25
+$textbox2.Top = 45
+$textbox2.Width = 50
+$textbox2.Text = '0'
+$troops_form.Controls.Add($textbox2)
+ 
+$textbox3 = New-Object “System.Windows.Forms.TextBox”
+$textbox3.Left = 25
+$textbox3.Top = 75
+$textbox3.Width = 50
+$textbox3.Text = '0'
+$troops_form.Controls.Add($textbox3)
+ 
+$textbox4 = New-Object “System.Windows.Forms.TextBox”
+$textbox4.Left = 25
+$textbox4.Top = 105
+$textbox4.Width = 50
+$textbox4.Text = '0'
+$troops_form.Controls.Add($textbox4)
+ 
+$textbox5 = New-Object “System.Windows.Forms.TextBox”
+$textbox5.Left = 25
+$textbox5.Top = 135
+$textbox5.Width = 50
+$textbox5.Text = '0'
+$troops_form.Controls.Add($textbox5)
+ 
+$textbox6 = New-Object “System.Windows.Forms.TextBox”
+$textbox6.Left = 25
+$textbox6.Top = 165
+$textbox6.Width = 50
+$textbox6.Text = '0'
+$troops_form.Controls.Add($textbox6)
+ 
+$textbox7 = New-Object “System.Windows.Forms.TextBox”
+$textbox7.Left = 25
+$textbox7.Top = 195
+$textbox7.Width = 50
+$textbox7.Text = '0'
+$troops_form.Controls.Add($textbox7)
+ 
+$textbox8 = New-Object “System.Windows.Forms.TextBox”
+$textbox8.Left = 25
+$textbox8.Top = 225
+$textbox8.Width = 50
+$textbox8.Text = '0'
+$troops_form.Controls.Add($textbox8)
+ 
+$textbox9 = New-Object “System.Windows.Forms.TextBox”
+$textbox9.Left = 25
+$textbox9.Top = 255
+$textbox9.Width = 50
+$textbox9.Text = '0'
+$troops_form.Controls.Add($textbox9)
+ 
+$textbox10 = New-Object “System.Windows.Forms.TextBox”
+$textbox10.Left = 25
+$textbox10.Top = 285
+$textbox10.Width = 50
+$textbox10.Text = '0'
+$troops_form.Controls.Add($textbox10)
+ 
+$button_troops = New-Object System.Windows.Forms.Button
+$button_troops.Text = 'Ok'
+$button_troops.Left = 190
+$button_troops.Top = 350
+$button_troops.Add_Click({$troops_form.Close()})
+$troops_form.Controls.Add($button_troops)
+ 
+$troops_form.Add_Shown({$troops_form.Activate()})
+[void]$troops_form.ShowDialog()
+ 
+#готовим и отправляем запросы на заполнение таблицы
+$per = 0
+while ($per -lt $x_coord.Count)
+{
+$body = 'cmd=raidList&action=ActionAddSlot&listId='+$id_farmlist+'&x='+$x_coord[$per]+'&y='+$y_coord[$per]+'&t1='+$textbox1.Text+'&t2='+$textbox2.Text+'&t3='+$textbox3.Text+'&t4='+$textbox4.Text+'&t5='+$textbox5.Text+'&t6='+$textbox6.Text+'&t7='+$textbox7.Text+'&t8='+$textbox8.Text+'&t9='+$textbox9.Text+'&t10='+$textbox10.Text+'&ajaxToken='+$token
+$url2 = $url+'ajax.php?cmd=raidList'
+Invoke-WebRequest -Method Post -Uri $url2 -Body $body -WebSession $session | out-null
+$per = $per + 1
+}
+ 
+ 
+# выводим окно завершения работы
+$end_form = New-Object System.Windows.Forms.Form
+$end_form.Text ='Готово'
+$end_form.StartPosition  = "CenterScreen"
+$end_form.AutoSize = $true
+$end_form.TopMost = $true
+$end_form.Width = 410
+$end_form.Height = 200 
+
+$textLabel11 = New-Object “System.Windows.Forms.Label”
+$textLabel11.Left = 15
+$textLabel11.Top = 15
+$textLabel11.Width = 400
+$textLabel11.Text = 'Цели в список '+$selected_farmlist.Text+' внесены в количестве: '+$x_coord.Count
+$end_form.Controls.Add($textLabel11)
+
+$button_end = New-Object System.Windows.Forms.Button
+$button_end.Text = 'Ok'
+$button_end.Left = 150
+$button_end.Top = 150
+$button_end.Add_Click({$end_form.Close()})
+$end_form.Controls.Add($button_end)
+ 
+$end_form.Add_Shown({$end_form.Activate()})
+[void]$end_form.ShowDialog()
+
+Remove-Variable textlabel11,button_end,end_form,url2,body,per,button_troops,textbox1,textbox2,textbox3,textbox4,textbox5,textbox6,textbox7,textbox8,textbox9,textbox10,troops,textlabel1,textlabel2,textlabel3,textlabel4,textlabel5,textlabel6,textlabel7,textlabel8,textlabel9,textlabel10,troops_form,y_coord,x_coord,t,full_coord,row,row_count,sheet,workbook,excel,file,id_farmlist,selected_farmlist,button_farmlist,FarmList,dropdown_farmlist,farmlist_form,farmlist_header,farmlist_heshTable,n,farmlist_id,farmlist_name,search_farmlist,session,url1,id_der,selected_der,button,dropdown_list,tok_mass,der_form,header,img1_temp,img1,i,der,img2_temp,img3_temp,url,img,token,login,password
